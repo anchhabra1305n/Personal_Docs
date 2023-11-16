@@ -1,0 +1,273 @@
+---
+title: Time Series Analysis of Unilever Sales Data
+author: Djikastra
+output:
+  html_document
+---
+
+```{r, message=FALSE, warning=FALSE}
+
+library(knitr)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(tidyverse)
+library(stats)
+library(astsa)
+library(bsts)
+library(magrittr)
+
+```
+
+```{r Set_working_directory, warning=FALSE}
+
+setwd("C:\\Users\\anchhabra\\Desktop\\Check_case_study\\Lag_check")
+train_data_raw = read.csv("Training_Data.csv")
+test_data = read.csv("test_data.csv")
+
+```
+
+
+```{r Raw_data_import,warning=FALSE}
+
+## Training data is given at daily level, however test data is given as a year into 13 periods. let's convert the training data into test data format
+
+train_data_raw  = train_data_raw %>% mutate(quantile = ntile(Day,429))
+
+## Group by quantile variable and taking the average values for each column
+
+train_data_summarized = train_data_raw %>% group_by(quantile) %>% summarise_each(funs(mean))
+train_data_summarized = as.data.frame(train_data_summarized)
+
+## The below plot is a time series plot of the sales over last 33 consecutive years
+
+p = ggplot(data = train_data_summarized, aes(x = quantile, y = EQ)) + 
+  geom_line(color = "#00AFBB", size = 1)
+
+theme_update(plot.title = element_text(hjust = 0.5))
+p = ggplot(data = train_data_summarized, aes(x = quantile, y = EQ)) + 
+  geom_line(color = "#00AFBB", size = 1)
+
+q = p + stat_smooth(
+  color = "#FC4E07", fill = "#FC4E07",
+  method = "loess")
+
+q + ggtitle("Sales over time") +
+  xlab("Time Periods") + ylab("Sales")
+
+# plot(ts(train_data_summarized$EQ),main="Sales over time",
+# ylab="Sales", type="l")
+
+## There is no conistent trend in the data from the begining but in last 10-15 years there is steady decline (slow trend) in the sales of the brand hence the series may not be stationary and there are no obvious outliers, There is seasonality - a regularly repeating pattern of highs and lows related to months of the year.
+
+```
+
+
+```{r,warning=FALSE,fig.width=12, fig.height=8}
+
+## Variables correlation with Y variables - including lagged X varaibles
+lag <- stats::lag
+
+par(mfrow=c(2,2))
+
+dev.off
+train_data = train_data_summarized[,-c(1:2)]
+EQ = ts(train_data$EQ)
+
+loop.vector <- 2:38
+y = train_data[,1]
+
+for (i in loop.vector) {
+  x <- train_data[,i]
+  # print(names(train_data[i]))
+  # Plot histogram of x
+  plot(x,y,
+
+       main = paste0("Sales"," ","over", " ",names(train_data[i])),
+       xlab = paste0(names(train_data[i])),
+       ylab = "Sales",
+       pch = 19,
+       frame = FALSE)
+  abline(lm(y ~ x, data = train_data), col = "red")
+}
+
+```
+
+
+```{r, warning=FALSE,fig.width=12, fig.height=8}
+
+## Variables correlation with Y variables - including lagged X varaibles
+lag <- stats::lag
+par(mfrow=c(2,2))
+
+train_data = train_data_summarized[,-c(1:2)]
+EQ = ts(train_data$EQ)
+
+column_names = names(train_data)
+x = list()
+y = list()
+ccf_v = list() 
+# EQ = as.data.frame(train_data$EQ)
+for (i in column_names)
+{
+  x = as.data.frame(train_data[i])
+  ccf_v = ccf(x[i],EQ, main = paste(names(x[i]), "EQ", sep = " & "))
+  ccf_v
+}
+
+# In the above plots, We do see cross correlations between EQ and predictors like - Social Search Impressions, Median rainfall, Inflation, Percentage of promotions dollars amount, EQ Category, EQ Subcategory and Percentage promotions dollars in subcategory. But again the correlations are not dominant, also we do  see not strong corss correlations between lagged predictors and Sales (EQ)
+
+```
+
+
+```{r Basic Time Series, warning=FALSE,fig.width=12, fig.height=8}
+
+par(mfrow=c(2,2))
+print(lag1.plot(train_data$EQ,6))
+
+## We do not see any relationship between Sales in period t and sales in period t-1, so an AR() model with any lags might not be a useful model
+
+## Autocorrelation between sales in time period t and t-10 time periods
+print(acf(train_data$EQ, xlim=c(1,10)))
+
+## We have a similar findings where there is not significant correlation between sales in period t and sales in period t-10 lags
+
+## Since there is no pattern in ACF plot for Sales(EQ) no differencing is required - But we should always check the ADF test - whether we need to do the differencing or not
+
+```
+
+```{r,warning = FALSE}
+##Since there is a downward trend (steady decline) in last 10-15 years of sales, we examine the first differences to detrend the series and try to make it stationary
+
+# EQdiff = list()
+#  for (i in 1:3)
+#  {
+#    EQdiff = diff(train_data$EQ,i)
+#    plot(EQdiff,type="o", main =  paste("Sales difference between period t and period t-", i,sep = ""),
+#         ylab = paste("EQdiff", i, sep =" "))
+#    acf(EQdiff,xlim=c(1,24))
+#  }
+
+
+## So considering only 1st order differencing
+EQ = ts(train_data$EQ)
+EQdiff1 = diff(EQ,1)
+class(EQdiff1)
+plot(EQdiff1,type="o", main = "Sales difference between period t and period t-1")
+
+## As We can see above, taking the first differencing only makes the series stationary
+
+## Taking lag for first order differencing
+lag <- stats::lag
+EQdifflag1=lag(EQdiff1,-1)
+y=cbind(EQdiff1,EQdifflag1)
+
+# AR(1) regression for first differences
+EQdiffar1=lm(y[,1]~y[,2]) 
+summary(EQdiffar1) # regression results
+acf(EQdiffar1$residuals, xlim = c(1,24)) # ACF of residuals for 24 lags.
+
+# This looks like the pattern of an AR(1) with a negative lag 1 autocorrelation. Sales in period t lag 1 is autoregressive terms is -46% sales in period t-1
+
+##
+
+# forecast_EQdiffar1 = forecast(EQdiffar1, h=39)
+
+
+forecast_EQdiffar1 = predict(EQdiffar1, n.ahead=39)
+plot(forecast_EQdiffar1)
+
+forecast_EQdiffar1 = as.data.frame(forecast_EQdiffar1)
+
+write.csv(forecast_EQdiffar1,"forecast_EQdiffar1.csv")
+
+```
+
+```{r,warning=FALSE}
+## We can see from above plot that PACF plot lags and we do not find any las significant even at 1st order of lags(p). But we should tentatively fix the p as 1. 
+
+## No lags are well above the significance line. So, let's tentatively fix q as 1
+
+## If your series is slightly under differenced, adding one or more additional AR terms usually makes it up. Likewise, if it is slightly over-differenced, try adding an additional MA term
+
+## Now including Moving average with Autoregressive terms and calculate ARMA and ARIMA model to generate forecast
+EQ = ts(train_data$EQ)
+acf2(EQ)
+# ARMA_1 = sarima (EQ, 1, 0, 1) # this is the over-parameterized ARMA(1,1) model 
+# ARMA_Forecast = sarima.for(EQ, 4, 1, 0, 0) # four forecasts from an AR(1) model for the erie data 
+
+```
+
+# Various plots and functions that help in detecting seasonality:
+# A seasonal subseries plot
+# Multiple box plot
+# Auto correlation plot
+# ndiffs() is used to determine the number of first differences required to make the time series non-seasonal
+
+```{r,warning=FALSE,fig.width=12, fig.height=8 }
+
+##Add BSTS modeling to improve the model
+nseasons = 13
+ss = list()
+
+ss = AddLocalLinearTrend(ss,y = train_data$EQ)
+ss = AddSeasonal(ss,train_data$EQ,nseasons = 13)
+
+rlls_model <- bsts(EQ ~ .,
+               state.specification = ss,
+               niter = 1000,
+               data = train_data,
+               expected.model.size = 1)
+
+summary(rlls_model)
+
+plot(rlls_model,'components')
+plot( rlls_model,'coefficients' )
+
+# The posterior distribution of the variables like - percentage promotion dollars in sales categories, subctaegories and rainfall are obtained by MCMC sampling. These probablities showcase measurement of the likelihood of inclusion of beforementioned variables in the true model.
+
+```
+
+
+## Adding the 2nd hurdle building the analysis on test data
+
+```{r,warning=FALSE, fig.width=12, fig.height=8}
+
+library(bsts)
+setwd("C:\\Users\\anchhabra\\Desktop\\Check_case_study\\Lag_check")
+
+train_data_from_test = read.csv("test_data_bsts_import_train_div.csv")
+test_data_from_test = read.csv("test_data_bsts_import_test_div.csv")
+eq = ts(train_data_from_test$EQ,start = c(2016,1,1),end = c(2018,06,30), frequency = 13)
+eq
+
+plot(eq)
+
+```
+
+```{r,warning=FALSE, fig.width=12, fig.height=10}
+
+##Model size 5
+rlls_model <- bsts(EQ ~ .,
+                   state.specification = ss,
+                   niter = 1000,
+                   data = train_data_from_test,
+                   expected.model.size = 5)
+plot(rlls_model,'components')
+plot(rlls_model,'coefficients' )
+
+
+# In the Test data, The Posterior probabilities of varaibles like - Competitor 3 Regular price index have -ve impact on our Brand sales which means if price competitor 3 RPI increases then our Brand's sales decreases, which is more intuitive than training data model.
+
+## Similarily, other predictors like Any Feat percentage ACV, Avg no. of items, competitor 2 RPI showcase a +ve impact on our Brand's sales hence, inclusion of these over other variables will exhibit significant probabilities.
+
+
+##rlls_model_predictions
+rlls_model_pred = predict(rlls_model,newdata = test_data_from_test,horizon = 6)
+plot(rlls_model_pred,plot.original = 33)
+
+```
+
+
+
+
